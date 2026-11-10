@@ -66,12 +66,19 @@ def _celestial_wcs(header):
     return wcs
 
 
-def fetch_candels_cutout(ra, dec, width_arcsec, height_arcsec, band="f606w", cache_dir=None):
+def fetch_candels_cutout(ra, dec, width_arcsec, height_arcsec, band="f606w", cache_dir=None,
+                         kind="drz"):
     """Cutout of the CANDELS-COSMOS mosaic centred on (ra, dec).
 
     Returns ``(data, wcs, zp_ab, header)``: `data` is (ny, nx) in e-/s with the
     pixel grid of the mosaic (north up), `wcs` its celestial WCS.
+
+    `kind` picks the product on the same grid: ``"drz"`` the science image,
+    ``"exp"`` the exposure-time map in seconds (``zp_ab`` is then NaN),
+    ``"wht"`` / ``"rms"`` the weight and noise maps.
     """
+    if kind not in ("drz", "exp", "wht", "rms"):
+        raise ValueError(f"kind must be drz, exp, wht or rms, got {kind!r}")
     band = band.lower()
     if band not in FILES:
         raise ValueError(f"band must be one of {sorted(FILES)}, got {band!r}")
@@ -79,17 +86,20 @@ def fetch_candels_cutout(ra, dec, width_arcsec, height_arcsec, band="f606w", cac
     if cache_dir is not None:
         os.makedirs(cache_dir, exist_ok=True)
         path = os.path.join(
-            cache_dir, f"candels_cos_{band}_{ra:.5f}_{dec:+.5f}_{width_arcsec:.1f}x{height_arcsec:.1f}.fits")
+            cache_dir,
+            f"candels_cos_{band}{'' if kind == 'drz' else '_' + kind}_{ra:.5f}_{dec:+.5f}"
+            f"_{width_arcsec:.1f}x{height_arcsec:.1f}.fits")
     if path is not None and os.path.exists(path):
         with fits.open(path) as hdul:
             data, header = np.array(hdul[0].data, dtype=float), hdul[0].header.copy()
         return data, _celestial_wcs(header), float(header["ZPAB"]), header
 
-    url = BASE + FILES[band]
+    fname = FILES[band].replace("_drz", "_" + kind)
+    url = BASE + fname
     header, offset = _read_primary_header(url)
     nx, ny = header["NAXIS1"], header["NAXIS2"]
     if header["BITPIX"] != -32:
-        raise ValueError(f"unexpected BITPIX {header['BITPIX']} in {FILES[band]}")
+        raise ValueError(f"unexpected BITPIX {header['BITPIX']} in {fname}")
     wcs = _celestial_wcs(header)
     scale = np.sqrt(abs(np.linalg.det(wcs.pixel_scale_matrix))) * 3600.0
     xc, yc = (float(v) for v in wcs.world_to_pixel_values(ra, dec))
@@ -110,14 +120,17 @@ def fetch_candels_cutout(ra, dec, width_arcsec, height_arcsec, band="f606w", cac
     band_rows = np.frombuffer(r.content, dtype=">f4").reshape(y1 - y0, nx)
     data = band_rows[:, x0:x1].astype(np.float32)
 
-    zp_ab = -2.5 * np.log10(header["PHOTFLAM"]) - 5.0 * np.log10(header["PHOTPLAM"]) - 2.408
+    if "PHOTFLAM" in header and "PHOTPLAM" in header:
+        zp_ab = -2.5 * np.log10(header["PHOTFLAM"]) - 5.0 * np.log10(header["PHOTPLAM"]) - 2.408
+    else:
+        zp_ab = float("nan")
     out = _celestial_wcs(header)
     out.wcs.crpix = out.wcs.crpix - [x0, y0]
     hdr = out.to_header()
     hdr["BAND"] = band.upper()
-    hdr["BUNIT"] = "ELECTRONS/S"
+    hdr["BUNIT"] = {"drz": "ELECTRONS/S", "exp": "s"}.get(kind, "")
     hdr["ZPAB"] = (float(zp_ab), "AB zero point: m = ZPAB - 2.5 log10(e-/s)")
-    hdr["SOURCE"] = FILES[band]
+    hdr["SOURCE"] = fname
     if path is not None:
         fits.PrimaryHDU(data, header=hdr).writeto(path, overwrite=True)
     return data.astype(float), _celestial_wcs(hdr), float(zp_ab), hdr
