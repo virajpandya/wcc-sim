@@ -244,3 +244,6 @@ scripts/psf_no_scatter/
 
 # one-off study notebooks and their outputs: never published
 notebooks_scrap/
+
+# Legacy Surveys notebook (13) query/output cache
+notebooks/ls_cache/
