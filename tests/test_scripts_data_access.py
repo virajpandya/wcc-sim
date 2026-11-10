@@ -166,7 +166,8 @@ class TestMosaicUrl:
     def test_every_field_lists_only_buildable_bands(self):
         for field, bands in cc.list_fields().items():
             for band in bands:
-                assert cc.mosaic_url(field, band).startswith(self.ROOT + FIELD_DIR[field])
+                root = cc.UVCANDELS_ROOT + field if band == "f435w" else self.ROOT + FIELD_DIR[field]   # F435W is UVCANDELS
+                assert cc.mosaic_url(field, band).startswith(root)
 
 
 FIELD_DIR = {"cosmos": "cosmos/cos-tot", "uds": "uds/uds-tot", "egs": "egs/egs-tot",
@@ -475,3 +476,21 @@ def test_no_unexpected_warnings_on_a_normal_cutout(server):
     with warnings.catch_warnings():
         warnings.simplefilter("error")
         cc.fetch_candels_cutout(150.0, 2.0, 3.0, 1.8, "f606w")
+
+
+class TestUvcandelsF435w:
+    def test_urls(self):
+        base = "https://archive.stsci.edu/hlsps/uvcandels/"
+        assert cc.mosaic_url("cosmos", "f435w") == base + "cosmos/hlsp_uvcandels_hst_acs-wfc_cosmos-30mas_f435w_v1.0_sci.fits"
+        assert cc.mosaic_url("egs", "f435w", "wht", "60mas") == base + "egs/hlsp_uvcandels_hst_acs-wfc_egs-60mas_f435w_v1.0_wht.fits"
+        assert cc.mosaic_url("cosmos", "f435w", "rms").endswith("_f435w_v1.0_rms.fits")
+
+    def test_no_exposure_map_and_only_two_fields(self):
+        with pytest.raises(ValueError, match="no exposure map"):
+            cc.mosaic_url("cosmos", "f435w", "exp")
+        with pytest.raises(ValueError, match="no f435w"):
+            cc.mosaic_url("uds", "f435w")
+        assert "f435w" in cc.list_fields()["cosmos"] and "f435w" in cc.list_fields()["egs"]
+
+    def test_candels_urls_unchanged(self):
+        assert cc.mosaic_url("cosmos", "f814w").endswith("cos-tot_f814w_v1.0_drz.fits")

@@ -15,6 +15,7 @@ small FITS file with a WCS.
 Fields and bands (``list_fields()``):
 
     cosmos, uds, egs   ACS f606w f814w (30 mas/px) and WFC3 f125w f160w (60 mas/px)
+    cosmos, egs        also ACS f435w, from UVCANDELS (central ~30% of the mosaic; no exposure map)
     goods-n, goods-s   the same plus ACS f850lp and WFC3 f105w
 
 In EGS and GOODS-N the 30 mas ACS mosaics and the 60 mas ones are separate files;
@@ -46,16 +47,20 @@ from astropy.wcs import WCS
 
 ROOT = "https://archive.stsci.edu/pub/hlsp/candels/"
 
-_ACS_BANDS = ("f606w", "f814w", "f850lp")
+#: UVCANDELS (Mehta et al. 2024) added ACS F435W over the central part of COSMOS and EGS, on the CANDELS pixel grid.
+UVCANDELS_ROOT = "https://archive.stsci.edu/hlsps/uvcandels/"
+
+_ACS_BANDS = ("f435w", "f606w", "f814w", "f850lp")
 _COMMON = ("f606w", "f814w", "f125w", "f160w")
+_UV = _COMMON + ("f435w",)
 _GOODS = ("f606w", "f814w", "f850lp", "f105w", "f125w", "f160w")
 
 #: field -> directory under ROOT, short tag for cache names, whether ACS and WFC3
 #: live in separate 30mas-acs / 60mas-all folders, and the available bands.
 FIELDS = {
-    "cosmos": {"dir": "cosmos/cos-tot", "tag": "cos", "split": False, "bands": _COMMON},
+    "cosmos": {"dir": "cosmos/cos-tot", "tag": "cos", "split": False, "bands": _UV},
     "uds": {"dir": "uds/uds-tot", "tag": "uds", "split": False, "bands": _COMMON},
-    "egs": {"dir": "egs/egs-tot", "tag": "egs", "split": True, "bands": _COMMON},
+    "egs": {"dir": "egs/egs-tot", "tag": "egs", "split": True, "bands": _UV},
     "goods-n": {"dir": "goods-n/gn-tot", "tag": "gn", "split": True, "bands": _GOODS},
     "goods-s": {"dir": "goods-s/gs-tot", "tag": "gs", "split": False, "bands": _GOODS},
 }
@@ -88,6 +93,11 @@ def mosaic_url(field, band, kind="drz", acs_scale="30mas"):
         raise ValueError(f"kind must be one of {list(_KINDS)}, got {kind!r}")
     if acs_scale not in ("30mas", "60mas"):
         raise ValueError(f"acs_scale must be '30mas' or '60mas', got {acs_scale!r}")
+    if band == "f435w":                                    # UVCANDELS: its own archive tree, both scales for both fields
+        if kind == "exp":
+            raise ValueError("the UVCANDELS F435W mosaics have no exposure map (kind 'exp'); use 'wht' or 'rms'")
+        product = {"drz": "sci", "wht": "wht", "rms": "rms"}[kind]
+        return f"{UVCANDELS_ROOT}{field}/hlsp_uvcandels_hst_acs-wfc_{field}-{acs_scale}_f435w_v1.0_{product}.fits"
     instrument = "acs" if band in _ACS_BANDS else "wfc3"
     mosaic = info["dir"].split("/")[1]                      # cos-tot, egs-tot, gn-tot, ...
     if info["split"]:
@@ -246,7 +256,7 @@ def fetch_candels_cutout(ra, dec, width_arcsec, height_arcsec, band="f606w", cac
     path = None
     if cache_dir is not None:
         os.makedirs(cache_dir, exist_ok=True)
-        tag = info["tag"] + ("-60mas" if info["split"] and band in _ACS_BANDS and acs_scale == "60mas" else "")
+        tag = info["tag"] + ("-60mas" if (info["split"] or band == "f435w") and band in _ACS_BANDS and acs_scale == "60mas" else "")
         path = os.path.join(
             cache_dir,
             f"candels_{tag}_{band}{'' if kind == 'drz' else '_' + kind}_{ra:.5f}_{dec:+.5f}"
