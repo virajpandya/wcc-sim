@@ -94,6 +94,32 @@ def detect_hst_sources(data, wcs, zp_ab, pix_arcsec=0.030, nsigma=3.0, npixels=1
     return out[good]
 
 
+def mask_to_sources(data, nsigma=3.0, smooth_sigma_px=2.0, dilate_px=4, min_area_px=30):
+    """`data` with everything away from detected light set to zero.
+
+    ``ImageComponent`` clips negative pixels to zero, so the positive half of
+    the HST pixel noise would otherwise enter the mock as sky signal, frozen
+    in place (about as large as the noise of a 10 h WCC stack at these
+    scales). Connected regions of the smoothed image above `nsigma` times its
+    noise and at least `min_area_px` pixels large are kept, grown by
+    `dilate_px`, noise inside them included; the rest becomes zero. The size
+    cut matters: at 3 sigma about one island in 50 of that size is noise
+    (estimated from the islands of the negative image), against about one in
+    five at 2.5 sigma.
+    """
+    from scipy.ndimage import binary_dilation, gaussian_filter, label
+
+    data = np.asarray(data, dtype=float)
+    smooth = gaussian_filter(np.nan_to_num(data), smooth_sigma_px)
+    _, _, sigma = sigma_clipped_stats(smooth, sigma=3)
+    labels, n = label(smooth > nsigma * sigma)
+    if n == 0:
+        return np.zeros_like(data)
+    big = np.bincount(labels.ravel())[1:] >= min_area_px
+    keep = binary_dilation(np.isin(labels, np.where(big)[0] + 1), iterations=dilate_px)
+    return np.where(keep, data, 0.0)
+
+
 def zest_sersic_n(ra, dec, radius_arcsec, cache_dir=None, match_arcsec=0.4):
     """Sersic index from the ACS Zurich (ZEST) GIM2D fits at IRSA, NaN where none.
 
