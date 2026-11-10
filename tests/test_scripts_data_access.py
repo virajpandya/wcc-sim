@@ -2,7 +2,7 @@
 
 * legacysurvey_galaxy_mock.fetch_tractor: Data Lab first, retries, fall back to the
   legacysurvey.org viewer, caching, column/row handling of the viewer table.
-* candels_cutout: URL layout of the five CANDELS fields, validation, the WCS of
+* hst_cutouts (CANDELS, UVCANDELS and GOODS): URL layout of the five CANDELS fields, validation, the WCS of
   headers that carry distortion keywords, and byte-range cutouts from a synthetic mosaic.
 """
 
@@ -18,8 +18,7 @@ from astropy.table import Table
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
 
-import candels_cutout as cc  # noqa: E402
-import goods_cutout as gc  # noqa: E402
+import hst_cutouts as hc  # noqa: E402
 import legacysurvey_galaxy_mock as lsm  # noqa: E402
 
 COLS = lsm.TRACTOR_COLUMNS
@@ -131,43 +130,43 @@ class TestViewerTable:
         assert float(calls[0]["rahi"]) == 360.0 and float(calls[1]["ralo"]) == 0.0
 
 
-# --------------------------------------------------------------------------- candels_cutout
+# --------------------------------------------------------------------------- hst_cutouts: CANDELS and UVCANDELS
 
 
 class TestMosaicUrl:
     ROOT = "https://archive.stsci.edu/pub/hlsp/candels/"
 
     def test_flat_layout_fields(self):
-        assert cc.mosaic_url("cosmos", "f606w") == (
+        assert hc.mosaic_url("cosmos", "f606w") == (
             self.ROOT + "cosmos/cos-tot/v1.0/hlsp_candels_hst_acs_cos-tot_f606w_v1.0_drz.fits")
-        assert cc.mosaic_url("goods-s", "f105w", "exp") == (
+        assert hc.mosaic_url("goods-s", "f105w", "exp") == (
             self.ROOT + "goods-s/gs-tot/v1.0/hlsp_candels_hst_wfc3_gs-tot_f105w_v1.0_exp.fits")
-        assert cc.mosaic_url("uds", "f160w").endswith("uds/uds-tot/v1.0/hlsp_candels_hst_wfc3_uds-tot_f160w_v1.0_drz.fits")
+        assert hc.mosaic_url("uds", "f160w").endswith("uds/uds-tot/v1.0/hlsp_candels_hst_wfc3_uds-tot_f160w_v1.0_drz.fits")
 
     def test_split_layout_fields(self):
-        assert cc.mosaic_url("egs", "f606w") == (
+        assert hc.mosaic_url("egs", "f606w") == (
             self.ROOT + "egs/egs-tot/v1.0/30mas-acs/hlsp_candels_hst_acs_egs-tot-30mas_f606w_v1.0_drz.fits")
-        assert cc.mosaic_url("egs", "f606w", acs_scale="60mas") == (
+        assert hc.mosaic_url("egs", "f606w", acs_scale="60mas") == (
             self.ROOT + "egs/egs-tot/v1.0/60mas-all/hlsp_candels_hst_acs_egs-tot-60mas_f606w_v1.0_drz.fits")
-        assert cc.mosaic_url("goods-n", "f160w") == (
+        assert hc.mosaic_url("goods-n", "f160w") == (
             self.ROOT + "goods-n/gn-tot/v1.0/60mas-all/hlsp_candels_hst_wfc3_gn-tot-60mas_f160w_v1.0_drz.fits")
 
     @pytest.mark.parametrize("args", [("mars", "f606w"), ("egs", "f850lp"), ("cosmos", "f105w"), ("cosmos", "r")])
     def test_unknown_field_or_band(self, args):
         with pytest.raises(ValueError):
-            cc.mosaic_url(*args)
+            hc.mosaic_url(*args)
 
     def test_unknown_kind_and_scale(self):
         with pytest.raises(ValueError, match="kind"):
-            cc.mosaic_url("cosmos", "f606w", kind="foo")
+            hc.mosaic_url("cosmos", "f606w", kind="foo")
         with pytest.raises(ValueError, match="acs_scale"):
-            cc.mosaic_url("egs", "f606w", acs_scale="10mas")
+            hc.mosaic_url("egs", "f606w", acs_scale="10mas")
 
     def test_every_field_lists_only_buildable_bands(self):
-        for field, bands in cc.list_fields().items():
+        for field, bands in hc.list_fields().items():
             for band in bands:
-                root = cc.UVCANDELS_ROOT + field if band == "f435w" else self.ROOT + FIELD_DIR[field]   # F435W is UVCANDELS
-                assert cc.mosaic_url(field, band).startswith(root)
+                root = hc.UVCANDELS_ROOT + field if band == "f435w" else self.ROOT + FIELD_DIR[field]   # F435W is UVCANDELS
+                assert hc.mosaic_url(field, band).startswith(root)
 
 
 FIELD_DIR = {"cosmos": "cosmos/cos-tot", "uds": "uds/uds-tot", "egs": "egs/egs-tot",
@@ -193,7 +192,7 @@ class TestCelestialWcs:
     def test_distortion_keywords_are_ignored(self):
         extra = {"CPDIS1": "Lookup", "DP1": "EXTVER: 1", "D2IMDIS1": "Lookup", "A_ORDER": 2, "A_0_2": 1e-3,
                  "B_ORDER": 2, "AP_ORDER": 2, "BP_ORDER": 2}
-        wcs = cc._celestial_wcs(_mosaic_header(100, 80, extra=extra))
+        wcs = hc._celestial_wcs(_mosaic_header(100, 80, extra=extra))
         assert wcs.sip is None
         ra, dec = wcs.pixel_to_world_values(49.5, 39.5)         # CRPIX is 1-based: (50.5, 40.5)
         assert ra == pytest.approx(150.0, abs=1e-6) and dec == pytest.approx(2.0, abs=1e-6)
@@ -220,14 +219,14 @@ class _Server:
 @pytest.fixture
 def server(monkeypatch):
     srv = _Server(header_extra={"CPDIS1": "Lookup", "A_ORDER": 2, "A_0_2": 1e-3})
-    monkeypatch.setattr(cc.requests, "get", srv.get)
+    monkeypatch.setattr(hc.requests, "get", srv.get)
     return srv
 
 
 class TestFetchCutout:
     def test_cutout_has_the_right_pixels_wcs_and_zero_point(self, server):
         # a 3" x 1.8" patch = 100 x 60 px of 0.03" at the mosaic centre
-        data, wcs, zp, hdr = cc.fetch_candels_cutout(150.0, 2.0, 3.0, 1.8, "f606w")
+        data, wcs, zp, hdr = hc.fetch_candels_cutout(150.0, 2.0, 3.0, 1.8, "f606w")
         assert data.shape == (60, 100)
         x0, y0 = int(data[0, 0] % 1000), int(data[0, 0] // 1000)       # pixel values encode their position
         assert abs(x0 - 50) <= 1 and abs(y0 - 30) <= 1                   # centred on the target, to a pixel
@@ -237,39 +236,39 @@ class TestFetchCutout:
         assert cx == pytest.approx(49.5, abs=1.0) and cy == pytest.approx(29.5, abs=1.0)
 
     def test_only_the_needed_rows_are_requested(self, server):
-        cc.fetch_candels_cutout(150.0, 2.0, 3.0, 1.8, "f606w")
+        hc.fetch_candels_cutout(150.0, 2.0, 3.0, 1.8, "f606w")
         header_read, rows_read = server.requests[0], server.requests[-1]
         assert header_read[0] == 0
         assert (rows_read[1] - rows_read[0] + 1) == 60 * server.nx * 4        # 60 rows, full width
 
     def test_cache_round_trip_needs_no_network(self, server, tmp_path, monkeypatch):
-        d1, _, zp1, _ = cc.fetch_candels_cutout(150.0, 2.0, 3.0, 1.8, "f606w", cache_dir=str(tmp_path))
-        monkeypatch.setattr(cc.requests, "get", lambda *a, **k: pytest.fail("network used"))
-        d2, _, zp2, _ = cc.fetch_candels_cutout(150.0, 2.0, 3.0, 1.8, "f606w", cache_dir=str(tmp_path))
+        d1, _, zp1, _ = hc.fetch_candels_cutout(150.0, 2.0, 3.0, 1.8, "f606w", cache_dir=str(tmp_path))
+        monkeypatch.setattr(hc.requests, "get", lambda *a, **k: pytest.fail("network used"))
+        d2, _, zp2, _ = hc.fetch_candels_cutout(150.0, 2.0, 3.0, 1.8, "f606w", cache_dir=str(tmp_path))
         np.testing.assert_array_equal(d1, d2)
         assert zp1 == zp2
 
     def test_cosmos_cache_names_are_unchanged(self, server, tmp_path):
-        cc.fetch_candels_cutout(150.0, 2.0, 3.0, 1.8, "f606w", cache_dir=str(tmp_path))
-        cc.fetch_candels_cutout(150.0, 2.0, 3.0, 1.8, "f606w", cache_dir=str(tmp_path), kind="exp")
+        hc.fetch_candels_cutout(150.0, 2.0, 3.0, 1.8, "f606w", cache_dir=str(tmp_path))
+        hc.fetch_candels_cutout(150.0, 2.0, 3.0, 1.8, "f606w", cache_dir=str(tmp_path), kind="exp")
         names = sorted(p.name for p in tmp_path.iterdir())
         assert names == ["candels_cos_f606w_150.00000_+2.00000_3.0x1.8.fits",
                          "candels_cos_f606w_exp_150.00000_+2.00000_3.0x1.8.fits"]
 
     def test_exposure_maps_have_no_zero_point(self, server):
-        data, _, zp, hdr = cc.fetch_candels_cutout(150.0, 2.0, 3.0, 1.8, "f606w", kind="exp")
+        data, _, zp, hdr = hc.fetch_candels_cutout(150.0, 2.0, 3.0, 1.8, "f606w", kind="exp")
         assert hdr["BUNIT"] == "s"            # the synthetic header still has PHOTFLAM, so zp is finite here
         assert data.shape == (60, 100)
 
     def test_outside_the_mosaic_raises(self, server):
         with pytest.raises(ValueError, match="outside"):
-            cc.fetch_candels_cutout(150.0 + 10 / 3600, 2.0, 3.0, 1.8, "f606w")
+            hc.fetch_candels_cutout(150.0 + 10 / 3600, 2.0, 3.0, 1.8, "f606w")
         with pytest.raises(ValueError, match="far from"):
-            cc.fetch_candels_cutout(10.0, -80.0, 3.0, 1.8, "f606w")
+            hc.fetch_candels_cutout(10.0, -80.0, 3.0, 1.8, "f606w")
 
     def test_download_cap(self, server):
         with pytest.raises(ValueError, match="max_download_mb"):
-            cc.fetch_candels_cutout(150.0, 2.0, 3.0, 1.8, "f606w", max_download_mb=0.001)
+            hc.fetch_candels_cutout(150.0, 2.0, 3.0, 1.8, "f606w", max_download_mb=0.001)
 
     def test_mostly_empty_patch_warns(self, monkeypatch):
         srv = _Server()
@@ -278,28 +277,28 @@ class TestFetchCutout:
         buf = io.BytesIO()
         fits.PrimaryHDU(srv.data.astype(np.float32), header=hdr).writeto(buf)
         srv.blob = buf.getvalue()
-        monkeypatch.setattr(cc.requests, "get", srv.get)
+        monkeypatch.setattr(hc.requests, "get", srv.get)
         with pytest.warns(UserWarning, match="empty"):
-            cc.fetch_candels_cutout(150.0, 2.0, 3.0, 1.8, "f606w")
+            hc.fetch_candels_cutout(150.0, 2.0, 3.0, 1.8, "f606w")
 
     def test_missing_mosaic_is_a_clear_error(self, monkeypatch):
-        monkeypatch.setattr(cc.requests, "get", lambda *a, **k: _Resp(b"", 404))
+        monkeypatch.setattr(hc.requests, "get", lambda *a, **k: _Resp(b"", 404))
         with pytest.raises(ValueError, match="no such mosaic"):
-            cc.fetch_candels_cutout(150.0, 2.0, 3.0, 1.8, "f606w", kind="exp")
+            hc.fetch_candels_cutout(150.0, 2.0, 3.0, 1.8, "f606w", kind="exp")
 
     def test_mosaic_info(self, server):
-        info = cc.mosaic_info("cosmos", "f606w")
+        info = hc.mosaic_info("cosmos", "f606w")
         assert (info["nx"], info["ny"]) == (server.nx, server.ny)
         assert info["pixel_scale_arcsec"] == pytest.approx(0.03, rel=1e-6)
         assert info["centre_ra"] == pytest.approx(150.0, abs=1e-3) and info["centre_dec"] == pytest.approx(2.0, abs=1e-3)
 
 
 class TestGetRetries:
-    """cc._get: retry connection errors, timeouts and 5xx; never a 404."""
+    """hc.get_with_retry: retry connection errors, timeouts and 5xx; never a 404."""
 
     @pytest.fixture(autouse=True)
     def _no_sleep(self, monkeypatch):
-        monkeypatch.setattr(cc.time, "sleep", lambda s: None)
+        monkeypatch.setattr(hc.time, "sleep", lambda s: None)
 
     def _flaky(self, monkeypatch, outcomes):
         calls = []
@@ -311,39 +310,39 @@ class TestGetRetries:
                 raise out
             return _Resp(b"ok", out)
 
-        monkeypatch.setattr(cc.requests, "get", get)
+        monkeypatch.setattr(hc.requests, "get", get)
         return calls
 
     def test_recovers_from_connection_errors(self, monkeypatch):
-        calls = self._flaky(monkeypatch, [cc.requests.ConnectionError("refused"), cc.requests.Timeout("slow"), 200])
-        assert cc._get("u").content == b"ok" and len(calls) == 3
+        calls = self._flaky(monkeypatch, [hc.requests.ConnectionError("refused"), hc.requests.Timeout("slow"), 200])
+        assert hc.get_with_retry("u").content == b"ok" and len(calls) == 3
 
     def test_retries_server_errors_but_not_a_missing_file(self, monkeypatch):
         calls = self._flaky(monkeypatch, [503, 200])
-        assert cc._get("u").status_code == 200 and len(calls) == 2
+        assert hc.get_with_retry("u").status_code == 200 and len(calls) == 2
         calls = self._flaky(monkeypatch, [404])
-        assert cc._get("u").status_code == 404 and len(calls) == 1
+        assert hc.get_with_retry("u").status_code == 404 and len(calls) == 1
 
     def test_gives_up_after_the_attempts(self, monkeypatch):
-        calls = self._flaky(monkeypatch, [cc.requests.ConnectionError("down")])
-        with pytest.raises(cc.requests.ConnectionError):
-            cc._get("u", attempts=3)
+        calls = self._flaky(monkeypatch, [hc.requests.ConnectionError("down")])
+        with pytest.raises(hc.requests.ConnectionError):
+            hc.get_with_retry("u", attempts=3)
         assert len(calls) == 3
         calls = self._flaky(monkeypatch, [502])
-        assert cc._get("u", attempts=2).status_code == 502 and len(calls) == 2   # the caller sees the last answer
+        assert hc.get_with_retry("u", attempts=2).status_code == 502 and len(calls) == 2   # the caller sees the last answer
 
     def test_a_flaky_archive_does_not_stop_a_cutout(self, server, monkeypatch):
-        real, state = cc.requests.get, {"n": 0}
+        real, state = hc.requests.get, {"n": 0}
 
         def flaky(*a, **k):
             state["n"] += 1
             if state["n"] in (1, 3):
-                raise cc.requests.ConnectionError("refused")
+                raise hc.requests.ConnectionError("refused")
             return real(*a, **k)
 
-        monkeypatch.setattr(cc.requests, "get", flaky)
-        monkeypatch.setattr(cc.time, "sleep", lambda s: None)
-        data, *_ = cc.fetch_candels_cutout(150.0, 2.0, 3.0, 1.8, "f606w")
+        monkeypatch.setattr(hc.requests, "get", flaky)
+        monkeypatch.setattr(hc.time, "sleep", lambda s: None)
+        data, *_ = hc.fetch_candels_cutout(150.0, 2.0, 3.0, 1.8, "f606w")
         assert data.shape == (60, 100) and state["n"] >= 4
 
 
@@ -351,14 +350,14 @@ class TestRotation:
     def test_mosaic_info_reports_the_rotation(self, monkeypatch):
         for phi in (0.0, 30.0, -49.7):
             srv = _Server(rotation_deg=phi)
-            monkeypatch.setattr(cc.requests, "get", srv.get)
-            assert cc.mosaic_info("egs", "f606w")["rotation_deg"] == pytest.approx(phi, abs=1e-6)
+            monkeypatch.setattr(hc.requests, "get", srv.get)
+            assert hc.mosaic_info("egs", "f606w")["rotation_deg"] == pytest.approx(phi, abs=1e-6)
 
     def test_bounding_cutout_size(self):
-        assert cc.bounding_cutout_size(50.0, 30.0, 0.0) == pytest.approx((50.0, 30.0))
-        assert cc.bounding_cutout_size(50.0, 30.0, 90.0) == pytest.approx((30.0, 50.0))
-        assert cc.bounding_cutout_size(50.0, 30.0, -90.0) == pytest.approx((30.0, 50.0))
-        w, h = cc.bounding_cutout_size(50.0, 30.0, 45.0)
+        assert hc.bounding_cutout_size(50.0, 30.0, 0.0) == pytest.approx((50.0, 30.0))
+        assert hc.bounding_cutout_size(50.0, 30.0, 90.0) == pytest.approx((30.0, 50.0))
+        assert hc.bounding_cutout_size(50.0, 30.0, -90.0) == pytest.approx((30.0, 50.0))
+        w, h = hc.bounding_cutout_size(50.0, 30.0, 45.0)
         assert w == pytest.approx(h) and w == pytest.approx(80.0 / np.sqrt(2.0))
 
     def test_the_bounding_cutout_really_contains_a_rotated_frame(self):
@@ -369,37 +368,37 @@ class TestRotation:
             corners = np.array([(sx * w / 2, sy * h / 2) for sx in (-1, 1) for sy in (-1, 1)])
             x = corners[:, 0] * c + corners[:, 1] * s
             y = -corners[:, 0] * s + corners[:, 1] * c
-            bw, bh = cc.bounding_cutout_size(w, h, phi)
+            bw, bh = hc.bounding_cutout_size(w, h, phi)
             assert abs(x).max() == pytest.approx(bw / 2) and abs(y).max() == pytest.approx(bh / 2)
 
 
-# --------------------------------------------------------------------------- goods_cutout
+# --------------------------------------------------------------------------- hst_cutouts: GOODS
 
 
 class TestGoodsUrls:
     def test_tile_urls(self):
-        assert gc.tile_url("goods-s", "f435w", "sect23") == gc.BASE + "h_sb_sect23_v2.0_drz_img.fits"
-        assert gc.tile_url("goods-n", "f775w", "sect11", "wht") == gc.BASE + "h_ni_sect11_v2.0_wht_img.fits"
-        assert gc.tile_url("GOODS-S", "F850LP", "sect45").endswith("h_sz_sect45_v2.0_drz_img.fits")
+        assert hc.goods_tile_url("goods-s", "f435w", "sect23") == hc.GOODS_ROOT + "h_sb_sect23_v2.0_drz_img.fits"
+        assert hc.goods_tile_url("goods-n", "f775w", "sect11", "wht") == hc.GOODS_ROOT + "h_ni_sect11_v2.0_wht_img.fits"
+        assert hc.goods_tile_url("GOODS-S", "F850LP", "sect45").endswith("h_sz_sect45_v2.0_drz_img.fits")
 
     @pytest.mark.parametrize("args", [("cosmos", "f606w"), ("goods-s", "f814w"), ("goods-s", "f606w", "exp")])
     def test_bad_field_band_or_kind(self, args):
         with pytest.raises(ValueError):
-            gc.tile_url(args[0], args[1], "sect11", *args[2:])
+            hc.goods_tile_url(args[0], args[1], "sect11", *args[2:])
 
     def test_the_documented_calibration_is_complete(self):
-        assert set(gc.ZP_AB) == set(gc.BANDS)
-        for field in gc.FIELDS:
-            assert set(gc.TYPICAL_EXPOSURE_S[field]) == set(gc.BANDS)
+        assert set(hc.GOODS_ZP_AB) == set(hc.GOODS_BANDS)
+        for field in hc.GOODS_FIELDS:
+            assert set(hc.GOODS_TYPICAL_EXPOSURE_S[field]) == set(hc.GOODS_BANDS)
 
     def test_list_sections_reads_the_archive_listing(self, monkeypatch):
-        gc.list_sections.cache_clear()
+        hc.list_goods_sections.cache_clear()
         page = ('<a href="h_sb_sect11_v2.0_drz_img.fits">x</a><a href="h_sb_sect12_v2.0_drz_img.fits">x</a>'
                 '<a href="h_sb_sect12_v2.0_wht_img.fits">x</a><a href="h_nb_sect13_v2.0_drz_img.fits">x</a>')
-        monkeypatch.setattr(gc.cc, "_get", lambda url, **k: _Resp(page.encode(), 200))
+        monkeypatch.setattr(hc, "get_with_retry", lambda url, **k: _Resp(page.encode(), 200))
         monkeypatch.setattr(_Resp, "text", property(lambda self: self.content.decode()), raising=False)
-        assert gc.list_sections("goods-s", "f435w") == ("sect11", "sect12")
-        gc.list_sections.cache_clear()
+        assert hc.list_goods_sections("goods-s", "f435w") == ("sect11", "sect12")
+        hc.list_goods_sections.cache_clear()
 
 
 class TestGoodsTiles:
@@ -407,8 +406,8 @@ class TestGoodsTiles:
 
     @pytest.fixture(autouse=True)
     def _tiles(self, monkeypatch):
-        gc.list_sections.cache_clear()
-        gc._tile_geometry.cache_clear()
+        hc.list_goods_sections.cache_clear()
+        hc._goods_tile_geometry.cache_clear()
         from astropy.wcs import WCS
 
         def geometry(field, band, section):
@@ -419,78 +418,94 @@ class TestGoodsTiles:
             w.wcs.crpix = [4096.5, 4096.5 - (8192 if section == "sect12" else 0)]      # sect12 lies one tile north of sect11
             return 8192, 8192, w
 
-        monkeypatch.setattr(gc, "list_sections", lambda field, band: ("sect11", "sect12"))
-        monkeypatch.setattr(gc, "_tile_geometry", geometry)
+        monkeypatch.setattr(hc, "list_goods_sections", lambda field, band: ("sect11", "sect12"))
+        monkeypatch.setattr(hc, "_goods_tile_geometry", geometry)
 
     def test_the_tile_containing_a_patch(self):
-        assert gc.find_tile("goods-s", "f606w", 53.0, -27.8, 180.0, 180.0) == "sect11"        # centre of sect11
+        assert hc.find_goods_tile("goods-s", "f606w", 53.0, -27.8, 180.0, 180.0) == "sect11"        # centre of sect11
         dec_north = -27.8 + 8192 * 0.03 / 3600                                                 # centre of sect12
-        assert gc.find_tile("goods-s", "f606w", 53.0, dec_north, 180.0, 180.0) == "sect12"
+        assert hc.find_goods_tile("goods-s", "f606w", 53.0, dec_north, 180.0, 180.0) == "sect12"
 
     def test_a_patch_across_a_tile_boundary_is_refused(self):
         dec_edge = -27.8 + 4096 * 0.03 / 3600                                                  # the boundary between the tiles
         with pytest.raises(ValueError, match="crosses the boundary"):
-            gc.find_tile("goods-s", "f606w", 53.0, dec_edge, 180.0, 180.0)
+            hc.find_goods_tile("goods-s", "f606w", 53.0, dec_edge, 180.0, 180.0)
 
     def test_a_patch_outside_the_mosaic_is_refused(self):
         with pytest.raises(ValueError, match="outside"):
-            gc.find_tile("goods-s", "f606w", 10.0, 40.0, 180.0, 180.0)
+            hc.find_goods_tile("goods-s", "f606w", 10.0, 40.0, 180.0, 180.0)
 
 
 class TestGoodsCutout:
     @pytest.fixture
     def tile_server(self, monkeypatch):
-        gc.list_sections.cache_clear()
-        gc._tile_geometry.cache_clear()
+        hc.list_goods_sections.cache_clear()
+        hc._goods_tile_geometry.cache_clear()
         srv = _Server(nx=200, ny=120)
-        monkeypatch.setattr(cc.requests, "get", srv.get)
-        monkeypatch.setattr(gc, "list_sections", lambda field, band: ("sect11",))
+        monkeypatch.setattr(hc.requests, "get", srv.get)
+        monkeypatch.setattr(hc, "list_goods_sections", lambda field, band: ("sect11",))
         return srv
 
     def test_cutout_values_zero_point_and_cache_name(self, tile_server, tmp_path):
-        data, wcs, zp, hdr = gc.fetch_goods_cutout(150.0, 2.0, 3.0, 1.8, "f435w", field="goods-s", cache_dir=str(tmp_path))
-        assert data.shape == (60, 100) and zp == gc.ZP_AB["f435w"] == pytest.approx(25.673)
+        data, wcs, zp, hdr = hc.fetch_goods_cutout(150.0, 2.0, 3.0, 1.8, "f435w", field="goods-s", cache_dir=str(tmp_path))
+        assert data.shape == (60, 100) and zp == hc.GOODS_ZP_AB["f435w"] == pytest.approx(25.673)
         assert hdr["BAND"] == "F435W" and hdr["BUNIT"] == "ELECTRONS/S"
         assert [p.name for p in tmp_path.iterdir()] == ["goods_s_f435w_150.00000_+2.00000_3.0x1.8.fits"]
-        again = gc.fetch_goods_cutout(150.0, 2.0, 3.0, 1.8, "f435w", field="goods-s", cache_dir=str(tmp_path))
+        again = hc.fetch_goods_cutout(150.0, 2.0, 3.0, 1.8, "f435w", field="goods-s", cache_dir=str(tmp_path))
         np.testing.assert_array_equal(again[0], data)
 
     def test_weight_maps_have_no_zero_point(self, tile_server):
-        _, _, zp, hdr = gc.fetch_goods_cutout(150.0, 2.0, 3.0, 1.8, "f606w", field="goods-n", kind="wht")
+        _, _, zp, hdr = hc.fetch_goods_cutout(150.0, 2.0, 3.0, 1.8, "f606w", field="goods-n", kind="wht")
         assert np.isnan(zp) and hdr["FIELD"] == "goods-n"
 
 
 class TestCutoutFromUrl:
     def test_the_shared_core_returns_pixels_and_a_cutout_wcs(self, monkeypatch):
         srv = _Server()
-        monkeypatch.setattr(cc.requests, "get", srv.get)
-        data, wcs, header = cc.cutout_from_url("http://x/y.fits", 150.0, 2.0, 3.0, 1.8, label="a test mosaic")
+        monkeypatch.setattr(hc.requests, "get", srv.get)
+        data, wcs, header = hc.cutout_from_url("http://x/y.fits", 150.0, 2.0, 3.0, 1.8, label="a test mosaic")
         assert data.shape == (60, 100) and data.dtype == np.float32 and header["NAXIS1"] == srv.nx
         cx, cy = wcs.world_to_pixel_values(150.0, 2.0)
         assert cx == pytest.approx(49.5, abs=1.0) and cy == pytest.approx(29.5, abs=1.0)
         with pytest.raises(ValueError, match="a test mosaic"):
-            cc.cutout_from_url("http://x/y.fits", 150.0 + 10 / 3600, 2.0, 3.0, 1.8, label="a test mosaic")
+            hc.cutout_from_url("http://x/y.fits", 150.0 + 10 / 3600, 2.0, 3.0, 1.8, label="a test mosaic")
 
 
 def test_no_unexpected_warnings_on_a_normal_cutout(server):
     with warnings.catch_warnings():
         warnings.simplefilter("error")
-        cc.fetch_candels_cutout(150.0, 2.0, 3.0, 1.8, "f606w")
+        hc.fetch_candels_cutout(150.0, 2.0, 3.0, 1.8, "f606w")
 
 
 class TestUvcandelsF435w:
     def test_urls(self):
         base = "https://archive.stsci.edu/hlsps/uvcandels/"
-        assert cc.mosaic_url("cosmos", "f435w") == base + "cosmos/hlsp_uvcandels_hst_acs-wfc_cosmos-30mas_f435w_v1.0_sci.fits"
-        assert cc.mosaic_url("egs", "f435w", "wht", "60mas") == base + "egs/hlsp_uvcandels_hst_acs-wfc_egs-60mas_f435w_v1.0_wht.fits"
-        assert cc.mosaic_url("cosmos", "f435w", "rms").endswith("_f435w_v1.0_rms.fits")
+        assert hc.mosaic_url("cosmos", "f435w") == base + "cosmos/hlsp_uvcandels_hst_acs-wfc_cosmos-30mas_f435w_v1.0_sci.fits"
+        assert hc.mosaic_url("egs", "f435w", "wht", "60mas") == base + "egs/hlsp_uvcandels_hst_acs-wfc_egs-60mas_f435w_v1.0_wht.fits"
+        assert hc.mosaic_url("cosmos", "f435w", "rms").endswith("_f435w_v1.0_rms.fits")
 
     def test_no_exposure_map_and_only_two_fields(self):
         with pytest.raises(ValueError, match="no exposure map"):
-            cc.mosaic_url("cosmos", "f435w", "exp")
+            hc.mosaic_url("cosmos", "f435w", "exp")
         with pytest.raises(ValueError, match="no f435w"):
-            cc.mosaic_url("uds", "f435w")
-        assert "f435w" in cc.list_fields()["cosmos"] and "f435w" in cc.list_fields()["egs"]
+            hc.mosaic_url("uds", "f435w")
+        assert "f435w" in hc.list_fields()["cosmos"] and "f435w" in hc.list_fields()["egs"]
 
     def test_candels_urls_unchanged(self):
-        assert cc.mosaic_url("cosmos", "f814w").endswith("cos-tot_f814w_v1.0_drz.fits")
+        assert hc.mosaic_url("cosmos", "f814w").endswith("cos-tot_f814w_v1.0_drz.fits")
+
+
+class TestMaskToSources:
+    def test_keeps_the_blob_and_zeroes_the_noise(self):
+        rng = np.random.default_rng(0)
+        data = rng.normal(0.0, 1.0, (200, 200))
+        yy, xx = np.mgrid[:200, :200]
+        data += 20.0 * np.exp(-((xx - 100) ** 2 + (yy - 100) ** 2) / (2 * 6.0**2))
+        out = hc.mask_to_sources(data)
+        assert out[100, 100] == data[100, 100]                       # the source is kept as it is, noise included
+        assert np.all(out[:30] == 0) and np.all(out[:, :30] == 0)    # far from it everything is zero
+        assert out.shape == data.shape
+
+    def test_pure_noise_becomes_empty(self):
+        out = hc.mask_to_sources(np.random.default_rng(1).normal(0.0, 1.0, (150, 150)))
+        assert np.count_nonzero(out) == 0

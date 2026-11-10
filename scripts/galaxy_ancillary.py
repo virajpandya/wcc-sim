@@ -1,6 +1,6 @@
 """Ancillary data for galaxies of the GOODS fields: DESI spectra and 3D-HST redshifts, masses and star formation rates.
 
-    import goods_ancillary as ga
+    import galaxy_ancillary as ga
     spec = ga.desi_galaxy_spectra(189.19, 62.20, 40.0)               # DESI DR1 galaxies within 40" (needs ``pip install sparclclient``)
     wave, flux, ivar, model = ga.desi_spectrum(spec["sparcl_id"][0])
     cat = ga.fetch_3dhst("goods-n", cache_dir="ls_cache")             # z_spec, z_peak, log mass, log SFR of 38000 sources
@@ -22,7 +22,7 @@ from astropy.coordinates import SkyCoord
 from astropy.table import Table, join
 import astropy.units as u
 
-from candels_cutout import _get
+from hst_cutouts import get_with_retry
 
 THREEDHST_BASE = "https://archive.stsci.edu/missions/hlsp/3d-hst/RELEASE_V4.0/Photometry/"
 THREEDHST_FIELDS = {"goods-n": ("GOODS-N", "goodsn"), "goods-s": ("GOODS-S", "goodss")}
@@ -52,7 +52,7 @@ def fetch_3dhst(field="goods-n", cache_dir=None):
             return Table.read(path)
     tables = {}
     for _, part in _PARTS:
-        tables[part] = Table.read(io.BytesIO(_get(threedhst_url(field, part)).content), format="fits")
+        tables[part] = Table.read(io.BytesIO(get_with_retry(threedhst_url(field, part)).content), format="fits")
     cat = tables["cat"]["id", "ra", "dec", "z_spec", "star_flag"]
     zout = tables["zout"]["id", "z_peak"]
     fout = tables["fout"]["id", "lmass", "lsfr"]

@@ -1,4 +1,4 @@
-"""Offline tests of scripts/goods_ancillary.py: 3D-HST catalog assembly, positional matching and the DESI (SPARCL) queries, all faked."""
+"""Offline tests of scripts/galaxy_ancillary.py: 3D-HST catalog assembly, positional matching and the DESI (SPARCL) queries, all faked."""
 
 import io
 import sys
@@ -11,7 +11,7 @@ from astropy.table import Table
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
 
-import goods_ancillary as ga  # noqa: E402
+import galaxy_ancillary as ga  # noqa: E402
 
 
 def _fits_bytes(table):
@@ -45,7 +45,7 @@ def test_fetch_3dhst_joins_the_three_catalogs_and_caches(tmp_path, monkeypatch):
         part = url.rsplit(".", 2)[-2]
         return SimpleNamespace(content=_fits_bytes(parts[part]))
 
-    monkeypatch.setattr(ga, "_get", fake_get)
+    monkeypatch.setattr(ga, "get_with_retry", fake_get)
     out = ga.fetch_3dhst("goods-n", cache_dir=str(tmp_path))
     assert out.colnames == ["id", "ra", "dec", "z_spec", "star_flag", "z_peak", "lmass", "lsfr"]
     assert list(out["id"]) == [1, 2, 3]
