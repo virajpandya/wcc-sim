@@ -34,9 +34,10 @@ import time
 import warnings
 
 import numpy as np
+import requests
 from astropy import units as u
 from astropy.coordinates import SkyCoord
-from astropy.table import Table
+from astropy.table import Table, vstack
 
 from wcc_sim import SersicComponent, detector_frame, empty_catalog, simulate_field
 from wcc_sim.starflux import REF_MAG, rate_for_ab, rate_for_spt
@@ -85,8 +86,80 @@ def _tractor_adql(table, ra, dec, radius_arcsec):
     )
 
 
-def fetch_tractor(ra, dec, radius_arcsec, release="ls_dr10", cache_dir=None):
-    """Tractor rows within a box of half-width `radius_arcsec` around (ra, dec)."""
+#: Legacy Surveys viewer catalog service: a second, independent route to the same
+#: Tractor rows when Data Lab is down. ``{layer}`` is the release with dashes.
+VIEWER_URL = "https://www.legacysurvey.org/viewer/{layer}/cat.fits"
+
+TRACTOR_COLUMNS = ["ra", "dec", "type", "shape_r", "shape_e1", "shape_e2", "sersic",
+                   "flux_g", "flux_r", "flux_z", "mw_transmission_r"]
+
+
+class _TimeoutSession(requests.Session):
+    """requests session with a default timeout.
+
+    pyvo has no client-side timeout (the ``timeout=`` keyword of ``run_sync`` is
+    sent to the server as a TAP parameter and ignored), so a hung gateway
+    blocked a run for 10 minutes before a 504 came back.
+    """
+
+    def __init__(self, timeout):
+        super().__init__()
+        self._default_timeout = timeout
+
+    def request(self, *args, **kwargs):
+        kwargs.setdefault("timeout", self._default_timeout)
+        return super().request(*args, **kwargs)
+
+
+def _tractor_datalab(release, ra, dec, radius_arcsec, timeout):
+    import pyvo
+
+    svc = pyvo.dal.TAPService(TAP_URL, session=_TimeoutSession(timeout))
+    result = svc.run_sync(_tractor_adql(f"{release}.tractor", ra, dec, radius_arcsec)).to_table()
+    result["type"] = np.char.strip(np.asarray(result["type"]).astype(str))
+    return result
+
+
+def _tractor_viewer(release, ra, dec, radius_arcsec, timeout):
+    """The same box from the viewer's cat.fits (brick-primary rows, same columns)."""
+    dec_lo, dec_hi = dec - radius_arcsec / 3600.0, dec + radius_arcsec / 3600.0
+    dra = radius_arcsec / 3600.0 / max(np.cos(np.radians(min(abs(dec) + radius_arcsec / 3600.0, 89.0))), 1e-3)
+    lo, hi = ra - dra, ra + dra
+    ranges = [(lo, hi)]
+    if lo < 0.0:
+        ranges = [(lo + 360.0, 360.0), (0.0, hi)]
+    elif hi > 360.0:
+        ranges = [(lo, 360.0), (0.0, hi - 360.0)]
+    url = VIEWER_URL.format(layer=release.replace("_", "-"))
+    parts = []
+    for ra_lo, ra_hi in ranges:
+        resp = requests.get(url, params={"ralo": f"{ra_lo:.7f}", "rahi": f"{ra_hi:.7f}",
+                                         "declo": f"{dec_lo:.7f}", "dechi": f"{dec_hi:.7f}"},
+                            timeout=timeout)
+        resp.raise_for_status()
+        tab = Table.read(io.BytesIO(resp.content), format="fits")
+        if "brick_primary" in tab.colnames:
+            tab = tab[np.asarray(tab["brick_primary"], dtype=bool)]
+        out = Table()
+        for col in TRACTOR_COLUMNS:
+            if col == "type":
+                out[col] = np.char.strip(np.asarray(tab[col]).astype(str))
+            else:
+                out[col] = np.asarray(tab[col], dtype=float)
+        parts.append(out)
+    return vstack(parts) if len(parts) > 1 else parts[0]
+
+
+def fetch_tractor(ra, dec, radius_arcsec, release="ls_dr10", cache_dir=None,
+                  source="auto", timeout=60.0, retries=1, backoff_s=2.0):
+    """Tractor rows within a box of half-width `radius_arcsec` around (ra, dec).
+
+    `source` is ``"datalab"`` (NOIRLab Astro Data Lab TAP), ``"viewer"`` (the
+    legacysurvey.org catalog service) or ``"auto"``: Data Lab first, then the
+    viewer if Data Lab fails. Each attempt has a client-side `timeout` [s] and is
+    retried `retries` times after `backoff_s` seconds; the result is cached, and
+    ``meta["source"]`` records which service answered. Falling back warns.
+    """
     path = None
     if cache_dir is not None:
         os.makedirs(cache_dir, exist_ok=True)
@@ -94,12 +167,28 @@ def fetch_tractor(ra, dec, radius_arcsec, release="ls_dr10", cache_dir=None):
             cache_dir, f"tractor_{release}_{ra:.5f}_{dec:+.5f}_{radius_arcsec:.1f}.ecsv")
         if os.path.exists(path):
             return Table.read(path, format="ascii.ecsv")
-    import pyvo
-
-    svc = pyvo.dal.TAPService(TAP_URL)
-    result = svc.run_sync(_tractor_adql(f"{release}.tractor", ra, dec, radius_arcsec),
-                          timeout=300).to_table()
-    result["type"] = np.char.strip(np.asarray(result["type"]).astype(str))
+    order = {"auto": ("datalab", "viewer"), "datalab": ("datalab",), "viewer": ("viewer",)}
+    if source not in order:
+        raise ValueError(f"source must be one of {sorted(order)}, got {source!r}")
+    fetchers = {"datalab": _tractor_datalab, "viewer": _tractor_viewer}
+    errors, result, used = [], None, None
+    for name in order[source]:
+        for attempt in range(1 + int(retries)):
+            try:
+                result = fetchers[name](release, ra, dec, radius_arcsec, timeout)
+                used = name
+                break
+            except Exception as err:    # network, gateway, parsing: try again, then the next service
+                errors.append(f"{name} (attempt {attempt + 1}): {type(err).__name__}: {str(err)[:150]}")
+                if attempt < int(retries):
+                    time.sleep(backoff_s)
+        if result is not None:
+            break
+    if result is None:
+        raise RuntimeError("could not fetch the Tractor catalog:\n  " + "\n  ".join(errors))
+    if errors:
+        warnings.warn(f"Tractor catalog came from {used} after: " + "; ".join(errors), UserWarning)
+    result.meta["source"] = used
     if path is not None:
         result.write(path, format="ascii.ecsv", overwrite=True)
     return result
